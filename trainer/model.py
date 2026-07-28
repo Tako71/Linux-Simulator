@@ -14,6 +14,7 @@ class Task:
     setup: str = ""                # что подготовить перед заданием
     needs: str = ""                # "systemd" | "net" | ""
     fail_msg: str = "Пока не сходится. Проверь ещё раз."
+    theory: bool = False           # True — познавательная страница без проверки
 
 
 @dataclass

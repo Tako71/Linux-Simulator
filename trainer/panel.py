@@ -98,8 +98,11 @@ class Panel:
         print(f"{DIM}{'─' * w}{R}")
         if self.flash:
             print(f"{self.flash_color}{self.flash}{R}")
-        print(f"{DIM}Enter{R} проверить  {DIM}h{R} подсказка  {DIM}s{R} решение  "
-              f"{DIM}n/p{R} след./пред.  {DIM}l{R} список  {DIM}r{R} сброс  {DIM}q{R} выход")
+        if t.theory:
+            print(f"{DIM}Enter{R} далее  {DIM}n/p{R} след./пред.  {DIM}l{R} список  {DIM}q{R} выход")
+        else:
+            print(f"{DIM}Enter{R} проверить  {DIM}h{R} подсказка  {DIM}s{R} решение  "
+                  f"{DIM}n/p{R} след./пред.  {DIM}l{R} список  {DIM}r{R} сброс  {DIM}q{R} выход")
 
     # -------------------------------------------------------------- команды
     def list_menu(self):
@@ -157,7 +160,14 @@ class Panel:
             if cmd in ("q", "quit", "exit"):
                 return
             if cmd == "":
-                if self._solved:
+                if self.course.task.theory:
+                    self.course.progress.done.add(self.course.task.id)
+                    self.course.progress.save()
+                    self.show_solution = False
+                    self.flash = ""
+                    self._solved = False
+                    self.course.next_unsolved()
+                elif self._solved:
                     self.show_solution = False
                     self.flash = ""
                     self._solved = False

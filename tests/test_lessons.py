@@ -43,12 +43,16 @@ class TestStructure(unittest.TestCase):
 class TestTaskContent(unittest.TestCase):
     def test_every_task_is_checkable(self):
         for t in ALL_TASKS:
+            if t.theory:
+                continue
             with self.subTest(task=t.id):
                 self.assertTrue(t.check or t.check_history,
                                 "задание невозможно проверить")
 
     def test_every_task_has_help(self):
         for t in ALL_TASKS:
+            if t.theory:
+                continue
             with self.subTest(task=t.id):
                 self.assertTrue(t.hints, "нет подсказок")
                 self.assertTrue(t.solution, "нет эталонного решения")
