@@ -747,4 +747,836 @@ Sticky bit — бит на каталогах:
     ],
 )
 
-MODULES = [m15, m16, m17]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M18 — Файловые системы под капотом
+# ─────────────────────────────────────────────────────────────────────────────
+
+m18 = Module(
+    id="m18", title="Файловые системы: ext4, LVM, RAID", level="теория",
+    tasks=[
+        Task(
+            id="m18-01", title="Как устроена файловая система ext4",
+            theory=True,
+            brief="""ext4 — стандартная ФС для большинства Linux-дистрибутивов.
+
+Основные структуры на диске:
+
+Superblock — «паспорт» ФС:
+  Хранит: размер блока, число inodes, число блоков, время последнего монтирования.
+  Дублируется в нескольких местах (защита от повреждения).
+  tune2fs -l /dev/sda1    # прочитать superblock
+
+Block groups — ФС делится на группы блоков:
+  Каждая группа содержит: bitmap блоков, bitmap inodes, таблицу inodes, данные.
+  Цель: данные файла и его inode — физически рядом (быстрее читать).
+
+Inode table — массив структур inode:
+  Размер inode по умолчанию: 256 байт.
+  Хранит: права, владелец, размер, временны́е метки, указатели на блоки.
+  НЕ хранит: имя файла (оно в записи каталога).
+
+Extent tree — как inode ссылается на данные:
+  Вместо прямых указателей на блоки ext4 использует extents:
+  Extent = {начальный блок, длина} — описывает непрерывный участок.
+  Файл из 1000 последовательных блоков = 1 extent (вместо 1000 указателей).
+
+Журнал (journal):
+  Перед записью ext4 сначала пишет в журнал, потом на место.
+  При сбое питания — перечитывает журнал и доигрывает незавершённые операции.
+  Это и есть «журналирование» (journaling).
+  Без него после сбоя нужен длинный fsck.
+
+Проверить ФС:
+  dumpe2fs /dev/sda1 | head -50    # полная информация о ФС
+  e2fsck -n /dev/sda1              # проверить без исправлений
+  tune2fs -l /dev/sda1             # краткая информация
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m18-02", title="Другие файловые системы: XFS, Btrfs, tmpfs",
+            theory=True,
+            brief="""Выбор ФС важен для производительности и надёжности.
+
+XFS:
+  Разработана SGI, оптимизирована для больших файлов и параллельного I/O.
+  Отлично масштабируется на многоядерных системах и массивах.
+  Стандарт для RHEL/CentOS. Нельзя уменьшить (только расширить).
+  Применение: медиасерверы, базы данных, хранилища.
+
+Btrfs (B-tree FS):
+  Copy-on-write: запись не перезаписывает, а пишет в новое место.
+  Снапшоты (snapshots): мгновенные, почти бесплатные по месту.
+  Проверка данных (checksums): обнаруживает битые данные.
+  RAID встроен. Можно добавлять диски без остановки.
+  Применение: десктоп, Fedora, openSUSE по умолчанию.
+
+ZFS (через OpenZFS):
+  Исходно Sun Solaris. Самая надёжная ФС.
+  Copy-on-write + checksums + RAID-Z + снапшоты + дедупликация.
+  Защита от «тихого повреждения данных» (silent corruption).
+  Применение: NAS, хранилище данных, FreeBSD.
+  На Linux: apt install zfsutils-linux
+
+tmpfs — ФС в памяти:
+  Файлы хранятся в RAM (и swap). При перезагрузке — исчезают.
+  Скорость: RAM = без задержек диска.
+  /tmp и /run — обычно tmpfs.
+  mount -t tmpfs -o size=512M tmpfs /mnt/fast   # создать вручную
+  df -h /tmp   # посмотреть размер
+
+Сравнение скорости (условно):
+  tmpfs > XFS ≈ ext4 > Btrfs (при большой нагрузке)
+  По надёжности: ZFS > Btrfs > ext4/XFS ≈ (все хороши)
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m18-03", title="LVM: гибкое управление дисками",
+            theory=True,
+            brief="""LVM (Logical Volume Manager) — слой абстракции над дисками.
+Позволяет изменять размеры разделов «на лету», без перезагрузки.
+
+Три уровня LVM:
+
+PV (Physical Volume) — физический диск или раздел:
+  pvcreate /dev/sdb              # инициализировать диск для LVM
+  pvdisplay                      # показать PV
+  pvs                            # краткий список
+
+VG (Volume Group) — группа PV, один большой «пул»:
+  vgcreate data /dev/sdb /dev/sdc   # создать VG из двух дисков
+  vgdisplay data                    # информация о VG
+  vgs                               # краткий список
+  vgextend data /dev/sdd            # добавить диск в группу
+
+LV (Logical Volume) — логический «раздел» из VG:
+  lvcreate -L 50G -n mysql data     # создать LV 50 ГБ
+  lvcreate -l 100%FREE -n backup data  # использовать всё свободное
+  lvdisplay                          # информация о LV
+  lvs                                # краткий список
+
+Использование LV как диска:
+  mkfs.ext4 /dev/data/mysql          # создать ФС
+  mount /dev/data/mysql /var/lib/mysql
+
+Расширить LV (без остановки):
+  lvextend -L +20G /dev/data/mysql          # добавить 20 ГБ
+  resize2fs /dev/data/mysql                 # расширить ФС (ext4)
+  xfs_growfs /var/lib/mysql                 # для XFS
+
+Снапшот (мгновенная копия):
+  lvcreate -L 5G -s -n mysql-snap /dev/data/mysql
+  # снапшот занимает только изменившиеся блоки
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m18-04", title="RAID в Linux (mdadm)",
+            theory=True,
+            brief="""RAID (Redundant Array of Independent Disks) — объединение дисков
+для надёжности и/или производительности.
+
+Основные уровни:
+
+RAID 0 (striping — чередование):
+  Данные делятся на полосы, пишутся на все диски параллельно.
+  Производительность: в N раз лучше чтения И записи.
+  Надёжность: ХУЖЕ одного диска. Сломается хоть один — данные потеряны.
+  Применение: кеш, временные данные.
+
+RAID 1 (mirroring — зеркало):
+  Каждый диск — точная копия другого.
+  Производительность: чтение быстрее (с двух дисков), запись = 1 диск.
+  Надёжность: переживёт падение N-1 дисков.
+  Применение: системный раздел, критичные данные.
+
+RAID 5 (striping + distributed parity):
+  Данные + контрольные суммы распределены по всем дискам.
+  Нужно минимум 3 диска. Переживёт потерю 1 диска.
+  Ёмкость: (N-1) × размер диска.
+  Производительность записи: медленнее из-за parity.
+
+RAID 6:
+  Как RAID 5 но два диска parity. Переживёт потерю 2 дисков.
+  Нужно минимум 4 диска.
+
+RAID 10 (1+0):
+  Зеркало из чередований. Нужно чётное число дисков (мин. 4).
+  Производительность RAID 0 + надёжность RAID 1.
+
+Software RAID в Linux (mdadm):
+  mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sdb /dev/sdc
+  cat /proc/mdstat              # состояние массива
+  mdadm --detail /dev/md0       # подробно
+
+После сбоя диска:
+  mdadm /dev/md0 --fail /dev/sdb    # пометить диск сломанным
+  mdadm /dev/md0 --remove /dev/sdb  # извлечь
+  mdadm /dev/md0 --add /dev/sdd     # добавить новый → ребилд начнётся сам
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m18-05", title="Диагностика дисков: S.M.A.R.T. и I/O",
+            theory=True,
+            brief="""S.M.A.R.T. (Self-Monitoring, Analysis and Reporting Technology):
+Встроенная самодиагностика дисков (HDD и SSD).
+
+  apt install smartmontools
+  smartctl -a /dev/sda           # полный отчёт
+  smartctl -H /dev/sda           # только вердикт (PASSED/FAILED)
+  smartctl -t short /dev/sda     # запустить короткий тест (~2 мин)
+  smartctl -t long /dev/sda      # длинный тест (~часы)
+
+Критичные атрибуты S.M.A.R.T.:
+  Reallocated_Sector_Ct   > 0 → диск переназначает плохие секторы (тревога!)
+  Pending_Sector_Count    > 0 → сектора ожидают переназначения
+  Uncorrectable_Sector    > 0 → нечитаемые сектора (критично!)
+  Power_On_Hours          → сколько часов работает диск
+  Temperature             → температура (>55°C опасно для HDD)
+
+Мониторинг I/O в реальном времени:
+
+iostat (из sysstat):
+  iostat -xz 1       # каждую секунду
+  %util > 80%        → диск перегружен
+  await > 20ms       → высокая задержка (для HDD норма 5-15ms, SSD < 1ms)
+  r/s, w/s           → операций чтения/записи в секунду
+
+iotop:
+  iotop -o           # только активные процессы
+  Показывает кто именно генерирует I/O
+
+Найти медленные файловые операции:
+  iowait в vmstat / iostat показывает % времени CPU ждёт I/O
+  Высокий iowait = узкое место — диск
+
+Нажми Enter, чтобы продолжить.""",
+        ),
+    ],
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M19 — Безопасность Linux
+# ─────────────────────────────────────────────────────────────────────────────
+
+m19 = Module(
+    id="m19", title="Безопасность Linux: capabilities, PAM, аудит", level="теория",
+    tasks=[
+        Task(
+            id="m19-01", title="Модель безопасности Linux: DAC и MAC",
+            theory=True,
+            brief="""Linux реализует два уровня контроля доступа.
+
+DAC (Discretionary Access Control) — дискреционный:
+  Стандартная модель Linux: пользователь сам контролирует свои файлы.
+  Права rwx + владелец + группа.
+  Слабость: если процесс скомпрометирован — он имеет все права своего пользователя.
+  Нет ограничений «сверху»: root всесилен.
+
+MAC (Mandatory Access Control) — мандатный:
+  Политики задаёт администратор, пользователи не могут их обойти.
+  Даже root ограничен.
+  Реализации: SELinux, AppArmor.
+
+SELinux (Security-Enhanced Linux):
+  Разработан NSA, используется в RHEL/CentOS/Fedora.
+  Каждому объекту присвоена метка (label): user:role:type:level
+  Политика = разрешённые взаимодействия между типами.
+  Режимы: enforcing (блокирует), permissive (только логирует), disabled.
+
+  getenforce             # текущий режим
+  setenforce 0           # переключить в permissive (временно)
+  ls -Z /etc/passwd      # метка файла
+  ps -Z -p 1             # метка процесса
+  audit2allow            # создать политику из логов отказов
+
+AppArmor:
+  Используется в Ubuntu/Debian. Проще SELinux.
+  Политики привязаны к путям (не к меткам).
+  Профили в /etc/apparmor.d/
+
+  aa-status                   # статус AppArmor
+  aa-complain /usr/sbin/nginx # режим «жалоб» (logonly)
+  aa-enforce /usr/sbin/nginx  # строгий режим
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m19-02", title="Linux Capabilities: разделение root",
+            theory=True,
+            brief="""Традиционно: либо у тебя все права root, либо ничего.
+Capabilities разбивают «суперсилу» root на ~40 отдельных прав.
+
+Зачем это нужно:
+  nginx нужен порт 80 (< 1024 = привилегированный).
+  Без capabilities — нужно запускать nginx от root (опасно!).
+  С capabilities — даём только CAP_NET_BIND_SERVICE (и ничего лишнего).
+
+Основные capabilities:
+  CAP_NET_BIND_SERVICE   слушать порты < 1024
+  CAP_NET_ADMIN          сетевая конфигурация (ip route, iptables)
+  CAP_SYS_ADMIN          «джокер»: много всего (монтирование, namespace и др.)
+  CAP_SYS_PTRACE         трассировка процессов (strace, gdb)
+  CAP_CHOWN              менять владельца файлов
+  CAP_KILL               посылать сигналы любым процессам
+  CAP_DAC_OVERRIDE       обходить проверку прав на файлы
+  CAP_SETUID/SETGID      менять UID/GID процесса
+
+Посмотреть capabilities:
+  capsh --print              # capabilities текущего shell
+  cat /proc/self/status | grep Cap   # в hex (нужен capsh для декодирования)
+  getcap /usr/bin/ping       # capabilities файла
+  getpcaps PID               # capabilities процесса
+
+Назначить capability файлу:
+  setcap cap_net_bind_service=+ep /usr/bin/node
+  # теперь node может слушать порт 80 без root
+  setcap -r /usr/bin/node    # убрать capabilities
+
+Три набора capabilities процесса:
+  Permitted   — максимум, что процесс может взять
+  Effective   — что реально используется сейчас
+  Inheritable — что передаётся дочерним процессам
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m19-03", title="PAM: Pluggable Authentication Modules",
+            theory=True,
+            brief="""PAM — стандарт аутентификации в Linux. Любая программа (login,
+sshd, sudo, su) не реализует аутентификацию сама — она вызывает PAM.
+
+Зачем это хорошо:
+  Меняешь правила один раз в PAM — меняется поведение всех программ.
+  Хочешь двухфакторную аутентификацию для sudo? Одна строчка в PAM.
+
+Конфигурация: /etc/pam.d/
+  /etc/pam.d/sshd       # правила для SSH
+  /etc/pam.d/sudo       # правила для sudo
+  /etc/pam.d/login      # правила для консольного входа
+  /etc/pam.d/common-*   # общие правила (включаются через @include)
+
+Формат строки:
+  тип  управление  модуль  аргументы
+
+Тип (что проверяем):
+  auth        аутентификация (пароль, токен)
+  account     проверка учётки (не истекла, не заблокирована)
+  password    смена пароля
+  session     действия при входе/выходе (mount домашнего каталога)
+
+Управление (что делать с результатом):
+  required    обязательно. Ошибка — в конечном итоге отказ, но остальные модули тоже выполняются
+  requisite   обязательно. Ошибка — НЕМЕДЛЕННЫЙ отказ
+  sufficient  достаточно. Успех — остальные не выполняются
+  optional    необязательно. Результат игнорируется
+
+Популярные модули:
+  pam_unix.so          стандартная Unix-аутентификация (/etc/shadow)
+  pam_google_authenticator.so   TOTP (2FA)
+  pam_faillock.so      блокировка после N неудачных попыток
+  pam_limits.so        ограничения ресурсов (/etc/security/limits.conf)
+  pam_nologin.so       блокировать всех если /etc/nologin существует
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m19-04", title="Аудит системы: auditd",
+            theory=True,
+            brief="""`auditd` — демон аудита ядра Linux. Журналирует события безопасности:
+кто, когда, что сделал. Незаменим для compliance (PCI DSS, SOC2, HIPAA).
+
+Установка и запуск:
+  apt install auditd audispd-plugins
+  systemctl enable --now auditd
+
+Файлы:
+  /etc/audit/auditd.conf       конфиг демона (куда писать, размер логов)
+  /etc/audit/rules.d/*.rules   правила аудита
+  /var/log/audit/audit.log     лог событий
+
+Управление правилами:
+  auditctl -l                  # список активных правил
+  auditctl -w /etc/passwd -p wa -k passwd-changes
+  #  -w путь      наблюдать за файлом/каталогом
+  #  -p wa        при записи (w) и изменении атрибутов (a)
+  #  -k ключ      тег для поиска в логах
+
+  auditctl -a always,exit -F arch=b64 -S execve -k exec-log
+  # логировать каждый запуск программы (execve syscall)
+
+Поиск в логах:
+  ausearch -k passwd-changes   # по ключу
+  ausearch -ui 1001            # по UID пользователя
+  ausearch -x /bin/su          # по имени программы
+  ausearch --start today       # с начала сегодняшнего дня
+
+Отчёты:
+  aureport                     # общая статистика
+  aureport --auth              # отчёт по аутентификациям
+  aureport --failed            # только неудачные события
+
+Что стоит отслеживать в продакшне:
+  Изменения в /etc/passwd, /etc/shadow, /etc/sudoers
+  Запуск программ с SUID
+  Подключения к /dev/mem, /dev/kmem
+  Все команды пользователей с UID=0
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m19-05", title="fail2ban, ufw и базовое укрепление сервера",
+            theory=True,
+            brief="""Практический чеклист укрепления нового Linux-сервера.
+
+1. Обновить систему:
+  apt update && apt upgrade -y
+
+2. Настроить SSH (см. модуль 13):
+  PermitRootLogin no
+  PasswordAuthentication no
+  AllowUsers deploy alice
+
+3. Firewall (ufw — упрощённый frontend к iptables):
+  ufw default deny incoming      # запретить всё входящее
+  ufw default allow outgoing     # разрешить всё исходящее
+  ufw allow 22/tcp               # SSH
+  ufw allow 80/tcp               # HTTP
+  ufw allow 443/tcp              # HTTPS
+  ufw enable
+  ufw status verbose
+
+4. fail2ban — автобан при брутфорсе:
+  apt install fail2ban
+  # Читает логи, при N неудачах за период — блокирует IP через iptables.
+  fail2ban-client status         # список jail-ов
+  fail2ban-client status sshd    # статус SSH jail
+  fail2ban-client set sshd banip 1.2.3.4   # забанить вручную
+  fail2ban-client set sshd unbanip 1.2.3.4 # разбанить
+
+5. Убрать лишние службы:
+  systemctl list-units --type=service --state=running
+  systemctl disable --now служба   # отключить ненужное
+
+6. Ограничить sudo:
+  visudo → конкретным пользователям конкретные команды
+
+7. Автообновления безопасности:
+  apt install unattended-upgrades
+  dpkg-reconfigure unattended-upgrades
+
+8. Мониторинг целостности файлов:
+  apt install aide
+  aide --init && aide --check   # проверить изменения системных файлов
+
+Нажми Enter, чтобы продолжить.""",
+        ),
+    ],
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M20 — Контейнеры изнутри
+# ─────────────────────────────────────────────────────────────────────────────
+
+m20 = Module(
+    id="m20", title="Контейнеры изнутри: namespaces, cgroups, Docker", level="теория",
+    tasks=[
+        Task(
+            id="m20-01", title="Контейнер ≠ виртуальная машина",
+            theory=True,
+            brief="""Главное заблуждение: «Docker — это лёгкая VM». Нет.
+
+Виртуальная машина (VM):
+  Полная эмуляция железа + отдельное ядро ОС.
+  Гипервизор (VMware, KVM, Hyper-V) изолирует VM на уровне железа.
+  Гостевая ОС не знает что она в VM (паравиртуализация — знает).
+  Старт: минуты. Памяти накладные расходы: сотни МБ (само ядро).
+  Полная изоляция: у каждой VM своё ядро.
+
+Контейнер:
+  Просто группа процессов с ограниченным «видом» на систему.
+  Использует ядро ХОСТОВОЙ системы (своего ядра нет!).
+  Изоляция через kernel namespaces + cgroups.
+  Старт: миллисекунды (нет загрузки ядра).
+  Памяти накладные расходы: мегабайты (только процессы).
+  НО: слабее изолированы. Уязвимость в ядре — угроза всем контейнерам.
+
+Что это означает практически:
+  В Linux-контейнере нельзя запустить Windows (нет её ядра).
+  Docker на Mac/Windows запускает Linux VM, а внутри неё контейнеры.
+  «Контейнеры — это процессы» — не метафора, буквально.
+
+  ps aux на хосте покажет процессы из контейнеров.
+  Контейнер использует ядро хоста — uname -r одинаков внутри и снаружи.
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m20-02", title="Linux Namespaces: изоляция ресурсов",
+            theory=True,
+            brief="""Namespace — механизм ядра, который даёт процессу «свой вид» на ресурс.
+Процесс в namespace видит только то, что ему показано.
+
+Семь типов namespaces:
+
+PID namespace:
+  Процессы видят только свои PID. PID 1 внутри контейнера.
+  На хосте это может быть PID 12345.
+  unshare --pid --fork bash   # создать новый PID namespace
+
+Network namespace:
+  Свои сетевые интерфейсы, таблицы маршрутизации, iptables.
+  Внутри контейнера — eth0 с адресом 172.17.0.2.
+  На хосте это виртуальный интерфейс vethXXX.
+  ip netns list               # список сетевых namespace
+  ip netns exec myns ip a     # выполнить команду в namespace
+
+Mount namespace:
+  Своё дерево монтирований. Контейнер видит только свою ФС.
+  Реализуется через pivot_root() или chroot().
+
+UTS namespace:
+  Свой hostname. Контейнер может иметь имя отличное от хоста.
+
+IPC namespace:
+  Изолированные inter-process communication (очереди, семафоры).
+
+User namespace:
+  Маппинг UID. UID 0 (root) внутри = непривилегированный UID снаружи.
+  Позволяет «rootless» контейнеры (без настоящего root на хосте).
+
+Time namespace (новый, Linux 5.6+):
+  Разные clock offset для процессов.
+
+Посмотреть namespaces:
+  lsns                        # все namespaces на системе
+  ls -l /proc/self/ns/        # namespaces текущего процесса
+  ls -l /proc/PID/ns/         # namespaces конкретного процесса
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m20-03", title="cgroups: ограничение ресурсов",
+            theory=True,
+            brief="""cgroups (control groups) — механизм ядра для ограничения и учёта
+потребления ресурсов группами процессов.
+
+Что можно ограничить:
+  cpu         процент CPU (cpu.shares, cpu.quota)
+  memory      максимум RAM и swap
+  blkio       скорость дискового I/O
+  net_cls     тегирование сетевых пакетов
+  pids        максимальное число процессов (защита от fork-bomb)
+  devices     разрешённые устройства
+
+cgroups v1 vs v2:
+  v1: каждый тип ресурса — отдельная иерархия (сложно).
+  v2: единая иерархия для всего (проще, современный стандарт).
+  Ubuntu 22.04+, Fedora 31+ используют v2 по умолчанию.
+
+Как это видно в /sys/fs/cgroup/:
+  ls /sys/fs/cgroup/                       # cgroups v2
+  cat /sys/fs/cgroup/memory.stat           # статистика памяти системы
+  ls /sys/fs/cgroup/system.slice/          # cgroup для системных служб
+
+Посмотреть cgroup процесса:
+  cat /proc/self/cgroup                    # к какой cgroup принадлежу
+  systemd-cgls                            # дерево cgroups через systemd
+
+systemd и cgroups:
+  Каждая systemd-служба — отдельная cgroup.
+  MemoryMax=512M в unit-файле → ядро ограничит память.
+  CPUQuota=50% → максимум 50% одного ядра.
+
+Docker и cgroups:
+  docker run --memory=512m --cpus=1 nginx
+  # Docker создаёт cgroup и ставит ограничения
+  cat /sys/fs/cgroup/docker/<CONTAINER_ID>/memory.max
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m20-04", title="Слоистая ФС: OverlayFS и образы Docker",
+            theory=True,
+            brief="""Образы Docker состоят из слоёв (layers). Это реализовано через OverlayFS.
+
+Принцип OverlayFS:
+  Накладывает несколько директорий («слоёв») в единое дерево.
+  Нижние слои — только для чтения (read-only).
+  Верхний слой — для записи (read-write).
+  При записи файла из нижнего слоя: копируется в верхний, изменяется там
+  (copy-on-write). Нижний не трогается.
+
+Как устроен образ Docker:
+  Слой 0: ubuntu:22.04 (базовый образ)
+  Слой 1: apt install nginx (добавлены файлы nginx)
+  Слой 2: COPY ./html /var/www/ (добавлен контент)
+  Слой 3: (верхний, R/W) — изменения в работающем контейнере
+
+  Каждый слой — это diff (только изменения). Хранится один раз.
+  Несколько контейнеров от одного образа = тысячи контейнеров,
+  один набор слоёв. Огромная экономия места.
+
+Посмотреть слои образа:
+  docker image inspect nginx | jq '.[].RootFS'
+  docker history nginx                          # история слоёв
+
+Посмотреть OverlayFS контейнера:
+  docker inspect <id> | jq '.[].GraphDriver'
+  # UpperDir — слой записи контейнера
+  # LowerDir — слои образа (R/O)
+  # MergedDir — смонтированный результат
+
+Что теряется при удалении контейнера:
+  Только UpperDir (слой записи). Слои образа — остаются.
+  Поэтому volumes нужны для persistence данных.
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m20-05", title="Путь пакета: от docker run до процесса",
+            theory=True,
+            brief="""Что происходит когда ты пишешь `docker run nginx`?
+
+1. Docker CLI → Docker Daemon (dockerd):
+   CLI отправляет REST-запрос daemon-у по unix-сокету /var/run/docker.sock.
+
+2. dockerd → containerd:
+   Docker Daemon не управляет контейнерами напрямую.
+   Он делегирует containerd — высокоуровневому container runtime.
+
+3. containerd → runc:
+   containerd скачивает образ (если нет локально), распаковывает слои.
+   Вызывает runc — низкоуровневый OCI-runtime, который непосредственно
+   создаёт контейнер.
+
+4. runc:
+   Создаёт namespaces: pid, net, mnt, uts, ipc.
+   Настраивает cgroups (ограничения ресурсов).
+   Монтирует OverlayFS (слои образа + writable layer).
+   Вызывает clone() / execve() — запускает процесс PID 1 контейнера.
+   Выходит (runc — не daemon, он только запускает).
+
+5. containerd-shim:
+   Промежуточный процесс между containerd и контейнером.
+   Остаётся жить пока контейнер работает.
+   Если containerd упадёт — контейнер продолжает работать.
+
+Стек технологий:
+  docker CLI → dockerd → containerd → containerd-shim → runc → контейнер
+
+OCI (Open Container Initiative):
+  Стандарт на форматы образов и container runtime.
+  Альтернативы: podman (без daemon), nerdctl (для containerd), cri-o.
+
+Нажми Enter, чтобы продолжить.""",
+        ),
+    ],
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M21 — Сеть изнутри
+# ─────────────────────────────────────────────────────────────────────────────
+
+m21 = Module(
+    id="m21", title="Сеть изнутри: netfilter, iptables, NAT", level="теория",
+    tasks=[
+        Task(
+            id="m21-01", title="Как пакет проходит через Linux",
+            theory=True,
+            brief="""Сетевой стек Linux — один из самых сложных компонентов ядра.
+Понимание пути пакета помогает диагностировать проблемы и настраивать фильтрацию.
+
+Путь входящего пакета:
+  Сетевой адаптер (NIC)
+    → Прерывание → Драйвер → Кольцевой буфер (ring buffer)
+    → Softirq → Сетевой стек ядра
+    → Netfilter hooks (PREROUTING)
+    → Таблица маршрутизации
+    → Если для нас → Netfilter (INPUT) → Сокет приложения
+    → Если транзит → Netfilter (FORWARD) → Исходящий интерфейс
+
+Путь исходящего пакета:
+  Приложение → Сокет → Сетевой стек
+    → Netfilter (OUTPUT)
+    → Таблица маршрутизации (выбор интерфейса)
+    → Netfilter (POSTROUTING)
+    → Сетевой адаптер → В сеть
+
+Netfilter — фреймворк в ядре:
+  5 точек перехвата (hooks): PREROUTING, INPUT, FORWARD, OUTPUT, POSTROUTING.
+  iptables, nftables, ipset работают через netfilter.
+  conntrack — отслеживание состояния соединений (для stateful firewall и NAT).
+
+Посмотреть состояния соединений:
+  cat /proc/net/nf_conntrack | head
+  conntrack -L                    # если установлен conntrack-tools
+
+Статистика сетевого стека:
+  ss -s                           # статистика сокетов
+  ip -s link                      # статистика интерфейсов (ошибки, дропы)
+  netstat -s                      # детальная статистика протоколов
+  cat /proc/net/dev               # счётчики по интерфейсам
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m21-02", title="iptables: правила фильтрации пакетов",
+            theory=True,
+            brief="""iptables — классический инструмент управления netfilter.
+Работает с таблицами, цепочками и правилами.
+
+Таблицы:
+  filter    фильтрация (INPUT, FORWARD, OUTPUT) — по умолчанию
+  nat       преобразование адресов (PREROUTING, POSTROUTING, OUTPUT)
+  mangle    изменение заголовков пакетов
+  raw       обход conntrack
+
+Базовые команды:
+  iptables -L -n -v           # список правил (filter) с счётчиками
+  iptables -L -n -v -t nat    # правила nat
+  iptables -F                 # очистить все правила (осторожно!)
+  iptables-save               # сохранить правила в stdout
+  iptables-restore < file     # загрузить правила из файла
+
+Структура правила:
+  iptables [-t таблица] -A ЦЕПОЧКА [условия] -j ДЕЙСТВИЕ
+
+Добавить правило:
+  iptables -A INPUT -p tcp --dport 22 -j ACCEPT   # разрешить SSH
+  iptables -A INPUT -s 10.0.0.5 -j DROP           # заблокировать IP
+  iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  iptables -P INPUT DROP                           # политика по умолчанию
+
+Действия (targets):
+  ACCEPT    пропустить
+  DROP      отбросить (без уведомления)
+  REJECT    отклонить (с ICMP ошибкой)
+  LOG       логировать
+  MASQUERADE  NAT (исходящий адрес = адрес интерфейса)
+  DNAT      изменить адрес назначения
+  SNAT      изменить адрес источника
+
+Современная альтернатива: nftables (постепенно заменяет iptables):
+  nft list ruleset            # показать все правила
+  ufw (Ubuntu) и firewalld (RHEL) — высокоуровневые обёртки
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m21-03", title="NAT: как работает маскарадинг",
+            theory=True,
+            brief="""NAT (Network Address Translation) — замена адресов в пакетах.
+Именно благодаря NAT миллиарды устройств используют «серые» адреса.
+
+SNAT (Source NAT) — замена адреса источника:
+  Исходящий трафик с частной сети → роутер меняет src IP на свой публичный.
+  Ответы приходят на роутер → он помнит соответствие (conntrack) → пробрасывает внутрь.
+
+MASQUERADE — частный случай SNAT:
+  Адрес источника берётся динамически с интерфейса (удобно для DHCP).
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+DNAT (Destination NAT) — проброс портов:
+  Входящий пакет на порт 8080 хоста → ядро меняет dst на 192.168.1.5:80.
+  iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to 192.168.1.5:80
+  iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+  # REDIRECT — частный случай DNAT на localhost
+
+Как Docker использует iptables:
+  docker run -p 8080:80 nginx   создаёт правило DNAT:
+  iptables -t nat -L DOCKER     # увидишь правила Docker
+
+ip_forward — ядро должно быть готово маршрутизировать:
+  cat /proc/sys/net/ipv4/ip_forward   # 0 = выключено
+  sysctl -w net.ipv4.ip_forward=1     # включить (до перезагрузки)
+  echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf  # постоянно
+
+Диагностика NAT:
+  conntrack -L | grep SNAT     # активные NAT-сессии
+  iptables -t nat -L -n -v     # счётчики пакетов через NAT-правила
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m21-04", title="Сетевые namespaces и виртуальные интерфейсы",
+            theory=True,
+            brief="""Именно так Docker изолирует сеть контейнеров — через network namespaces
+и пары veth (virtual ethernet).
+
+veth (virtual ethernet pair):
+  Создаётся парой: что войдёт в один конец — выйдет из другого.
+  Один конец помещается в namespace контейнера (как eth0).
+  Другой конец — на хосте (как vethXXXX), подключён к bridge docker0.
+
+docker0 — Linux bridge:
+  Виртуальный коммутатор. Все контейнеры подключаются к нему.
+  Контейнеры в одной сети видят друг друга через docker0.
+  ip link show docker0    # bridge интерфейс
+  brctl show              # таблица bridge (если установлен bridge-utils)
+
+Создать network namespace вручную:
+  ip netns add myns                                 # создать namespace
+  ip link add veth0 type veth peer name veth1       # создать пару veth
+  ip link set veth1 netns myns                      # перенести конец в namespace
+  ip netns exec myns ip link set veth1 up           # поднять интерфейс
+  ip netns exec myns ip addr add 10.0.0.2/24 dev veth1
+  ip link set veth0 up
+  ip addr add 10.0.0.1/24 dev veth0
+  ip netns exec myns ping 10.0.0.1                  # пинг из namespace на хост
+
+  ip netns list           # список namespace
+  ip netns exec myns ss -tulpn   # сокеты внутри namespace
+
+DNS в Docker:
+  Контейнеры резолвят имена через встроенный DNS Docker (127.0.0.11).
+  Он обращается к /etc/resolv.conf хоста для внешних имён.
+  cat /etc/resolv.conf внутри контейнера    # увидишь 127.0.0.11
+
+Нажми Enter, чтобы перейти к следующей странице.""",
+        ),
+        Task(
+            id="m21-05", title="Диагностика сети: полный арсенал",
+            theory=True,
+            brief="""Системный подход к диагностике сетевых проблем.
+
+Уровень 1 — физика/канал:
+  ip link                      # состояние интерфейсов (UP/DOWN, errors)
+  ethtool eth0                 # скорость, дуплекс, autoneg
+  ip -s link show eth0         # счётчики ошибок
+
+Уровень 2 — IP/маршрутизация:
+  ip a                         # адреса
+  ip route                     # таблица маршрутизации
+  ip route get 8.8.8.8         # какой маршрут для этого адреса
+  ping -c4 8.8.8.8             # ICMP до шлюза/интернета
+  traceroute 8.8.8.8           # трассировка маршрута
+  mtr 8.8.8.8                  # traceroute + ping в реальном времени
+
+Уровень 3 — DNS:
+  dig +short google.com        # резолвинг
+  dig @8.8.8.8 google.com      # через конкретный DNS
+  cat /etc/resolv.conf         # текущий резолвер
+  systemd-resolve --status     # если systemd-resolved
+
+Уровень 4 — TCP/порты:
+  ss -tulpn                    # что слушает на этой машине
+  nc -zv host 443              # доступен ли порт
+  curl -v https://example.com  # HTTP с деталями
+  telnet host 25               # SMTP handshake
+
+Захват пакетов:
+  tcpdump -i eth0 -n           # все пакеты на интерфейсе
+  tcpdump -i eth0 port 80      # только HTTP
+  tcpdump -i eth0 -w cap.pcap  # записать в файл (открыть в Wireshark)
+  tcpdump -i eth0 host 1.2.3.4 # пакеты от/к конкретному IP
+
+Нажми Enter, чтобы продолжить.""",
+        ),
+    ],
+)
+
+MODULES = [m15, m16, m17, m18, m19, m20, m21]
