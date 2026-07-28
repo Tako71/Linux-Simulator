@@ -1,0 +1,10 @@
+# в образ едут только Dockerfile и container/
+.git
+.github
+trainer
+tests
+docs
+README.md
+install-server.sh
+ltrain
+**/__pycache__
